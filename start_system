@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# =========================
+# CONFIGURACIÓN
+# =========================
+PROJECT_ROOT="${HOME}/tfg"
+EBPF_DIR="${PROJECT_ROOT}/ebpf"
+COLLECTOR_DIR="${PROJECT_ROOT}/collector"
+BPF_PIN_DIR="/sys/fs/bpf/block_latency"
+BPF_OBJECT="block_latency.o"
+RUNQ_PIN_DIR="/sys/fs/bpf/runq_latency"
+RUNQ_OBJECT="runq_latency.o"
+
+PROM_DIR="${HOME}/prometheus-lab"
+PROM_PATTERN="prometheus-*.linux-amd64"
+START_PROMETHEUS="${1:-no}"   # usar: ./start_system.sh yes
+
+# =========================
+# FUNCIONES AUXILIARES
+# =========================
+log() {
+  echo
+  echo "=================================================="
+  echo "[INFO] $1"
+  echo "=================================================="
+}
+
+warn() {
+  echo
+  echo "[WARN] $1"
+}
+
+# =========================
+# 1. PREPARACIÓN DEL NODO
+# =========================
+log "Activando modulos y sysctl necesarios"
+
+sudo modprobe br_netfilter || true
+
+sudo sysctl -w net.bridge.bridge-nf-call-iptables=1
+sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=1
+sudo sysctl -w net.ipv4.ip_forward=1
+
+log "Desactivando swap"
+sudo swapoff -a || true
+
+# =========================
+# 2. SERVICIOS BASE
+# =========================
+log "Reiniciando containerd y kubelet"
+sudo systemctl restart containerd
+sudo systemctl restart kubelet
+
+log "Comprobando estado de containerd y kubelet"
+sudo systemctl is-active --quiet containerd && echo "containerd: OK" || warn "containerd no está activo"
+sudo systemctl is-active --quiet kubelet && echo "kubelet: OK" || warn "kubelet no está activo"
+
+# =========================
+# 3. COMPROBACIÓN KUBERNETES
+# =========================
+log "Comprobando nodo y pods del sistema"
+#kubectl get nodes || warn "kubectl get nodes ha fallado"
+#kubectl get pods -A -o wide || warn "kubectl get pods -A ha fallado"
+
+log "Comprobando Flannel"
+#kubectl get pods -n kube-flannel -o wide || warn "No se pudo consultar kube-flannel"
+
+# =========================
+# 4. RECARGA eBPF
+# =========================
+log "Recargando programa eBPF"
+
+cd "${EBPF_DIR}"
+
+if [[ ! -f "${BPF_OBJECT}" ]]; then
+  echo "[ERROR] No existe ${EBPF_DIR}/${BPF_OBJECT}"
+  exit 1
+fi
+
+sudo rm -rf "${BPF_PIN_DIR}" "${RUNQ_PIN_DIR}"
+sudo mkdir -p "${BPF_PIN_DIR}" "${RUNQ_PIN_DIR}"
+
+sudo bpftool prog loadall "${BPF_OBJECT}" "${BPF_PIN_DIR}" autoattach pinmaps "${BPF_PIN_DIR}"
+sudo bpftool prog loadall "${RUNQ_OBJECT}" "${RUNQ_PIN_DIR}" autoattach pinmaps "${RUNQ_PIN_DIR}"
+
+# Sanity-check: assert pinned maps and at least one program per directory.
+for d in "${BPF_PIN_DIR}" "${RUNQ_PIN_DIR}"; do
+  if ! sudo find "${d}" -mindepth 1 -print -quit | grep -q .; then
+    echo "[ERROR] No se han pineado objetos en ${d}"
+    exit 1
+  fi
+done
+
+if ! sudo bpftool prog show pinned "${BPF_PIN_DIR}/block_rq_issue" >/dev/null 2>&1 \
+   && ! sudo bpftool prog show pinned "${BPF_PIN_DIR}/handle_block_rq_issue" >/dev/null 2>&1; then
+  warn "No se ha encontrado el programa block_rq_issue cargado y attached"
+fi
+
+log "Contenido de bpffs para block_latency"
+sudo ls -R "${BPF_PIN_DIR}"
+log "Contenido de bpffs para runq_latency"
+sudo ls -R "${RUNQ_PIN_DIR}"
+
+
+# =========================
+# 5. ARRANCAR PROMETHEUS (OPCIONAL)
+# =========================
+if [[ "${START_PROMETHEUS}" == "yes" ]]; then
+  log "Arrancando Prometheus"
+
+  cd "${PROM_DIR}"
+  PROM_REAL_DIR=$(find . -maxdepth 1 -type d -name "${PROM_PATTERN}" | head -n 1 || true)
+
+  if [[ -z "${PROM_REAL_DIR}" ]]; then
+    echo "[ERROR] No se ha encontrado directorio Prometheus en ${PROM_DIR}"
+    exit 1
+  fi
+
+  cd "${PROM_REAL_DIR}"
+
+  if pgrep -f "/prometheus( |$)" >/dev/null 2>&1; then
+    warn "Prometheus ya parece estar en ejecución"
+  else
+    nohup ./prometheus --config.file=prometheus.yml > prometheus.log 2>&1 &
+    sleep 2
+  fi
+
+  if curl -fsS http://localhost:9090/-/ready >/dev/null; then
+    echo "prometheus: OK"
+  else
+    warn "Prometheus no responde todavía"
+  fi
+fi
+
+# =========================
+# 6. RESUMEN FINAL
+# =========================
+log "Resumen de servicios levantados"
+
+echo "bpffs: ${BPF_PIN_DIR}"
+echo "collector log: ${COLLECTOR_DIR}/collector.log"
+echo "collector metrics: http://localhost:9100/metrics"
+
+if [[ "${START_PROMETHEUS}" == "yes" ]]; then
+  echo "prometheus UI: http://localhost:9090"
+fi
+echo "================================================="
+sleep 2
+
+# =========================
+# 7. ARRANCAR COLLECTOR
+# =========================
+log "Arrancando collector"
+
+cd "${COLLECTOR_DIR}"
+
+sudo pkill -f "/collector($| )|go run \." || true
+sleep 1
+
+if [[ -f "./collector" ]]; then
+  sudo nohup ./collector > collector.log 2>&1 &
+else
+  sudo nohup go run . > collector.log 2>&1 &
+fi
+COLLECTOR_PID=$!
+echo "collector PID: ${COLLECTOR_PID}"
+sleep 3
+
+# =========================
+# 8. COMPROBAR ENDPOINT DEL COLLECTOR
+# =========================
+log "Comprobando endpoint HTTP del collector"
+if curl -fsS http://localhost:9100/ >/dev/null; then
+  echo "collector HTTP: OK"
+else
+  warn "El endpoint del collector no responde todavía"
+fi
+echo
+echo "Script finalizado."

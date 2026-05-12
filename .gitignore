@@ -1,0 +1,29 @@
+# Binarios compilados
+collector/collector
+operator/bin/
+ebpf/*.o
+ebpf/build/
+
+# Logs
+*.log
+
+# Ficheros de prueba
+**/testfile.bin
+
+# Documentación intermedia (solo el PDF se versiona)
+DOCUMENTACION.html
+DOCUMENTACION.odt
+
+# Notas de agentes / spec privadas
+CLAUDE.md
+AGENTS.md
+.claude/
+
+# Temporales
+*.tmp
+*.swp
+.DS_Store
+
+# IDE
+.idea/
+.vscode/

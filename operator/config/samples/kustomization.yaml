@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- autoremediation_v1alpha1_ioremediationpolicy.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
