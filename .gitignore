@@ -1,29 +1,58 @@
+# =========================
 # Binarios compilados
+# =========================
 collector/collector
 operator/bin/
 ebpf/*.o
 ebpf/build/
 
+# =========================
+# Coverage y artefactos de test
+# =========================
+*.out
+cover.out
+coverage.out
+
+# =========================
 # Logs
+# =========================
 *.log
 
-# Ficheros de prueba
+# =========================
+# Ficheros de prueba generados
+# =========================
 **/testfile.bin
 
+# =========================
 # Documentación intermedia (solo el PDF se versiona)
+# =========================
 DOCUMENTACION.html
 DOCUMENTACION.odt
 
+# =========================
 # Notas de agentes / spec privadas
+# =========================
 CLAUDE.md
 AGENTS.md
+**/AGENTS.md
 .claude/
 
+# =========================
+# Repos git anidados / scratch
+# =========================
+eBPF_Kubernetes-operator/
+
+# =========================
 # Temporales
+# =========================
 *.tmp
 *.swp
 .DS_Store
+*~
 
+# =========================
 # IDE
+# =========================
 .idea/
 .vscode/
+**/.vscode/

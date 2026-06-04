@@ -1,0 +1,18 @@
+# Política IO (fase 2): expulsa el pod si la latencia de disco persiste.
+apiVersion: autoremediation.tfg.local/v1alpha1
+kind: IORemediationPolicy
+metadata:
+  name: e2e-io-evict
+  namespace: default
+spec:
+  targetPodSelector:
+    matchLabels:
+      app: victim
+      saturation-type: io
+  prometheusEndpoint: "http://prometheus.default.svc.cluster.local:9090"
+  metricType: "IO"
+  evaluationWindow: "30s"
+  latencyThreshold: "10ms"
+  action: "EvictAndTaint"
+  evictAndTaintConfig:
+    taintDuration: "5m"

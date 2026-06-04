@@ -1,0 +1,19 @@
+# Política CPU (fase 2): si la saturación persiste, expulsa el pod y aplica
+# taint al nodo durante 5 minutos.
+apiVersion: autoremediation.tfg.local/v1alpha1
+kind: IORemediationPolicy
+metadata:
+  name: e2e-cpu-evict
+  namespace: default
+spec:
+  targetPodSelector:
+    matchLabels:
+      app: victim
+      saturation-type: cpu
+  prometheusEndpoint: "http://prometheus.default.svc.cluster.local:9090"
+  metricType: "CPU"
+  evaluationWindow: "30s"
+  latencyThreshold: "5ms"
+  action: "EvictAndTaint"
+  evictAndTaintConfig:
+    taintDuration: "5m"

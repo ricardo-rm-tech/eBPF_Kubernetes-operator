@@ -1,0 +1,24 @@
+# Pod víctima que satura la CPU para disparar la métrica ebpf_cpu_runq_latency_ns_total.
+# Se le da un límite bajo (200m) para que con 4 workers se sature rápidamente
+# y el operator pueda escalarlo verticalmente hasta el MaxCPULimit configurado.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: victim-cpu
+  namespace: default
+  labels:
+    app: victim
+    saturation-type: cpu
+spec:
+  restartPolicy: Never
+  containers:
+  - name: stress
+    image: polinux/stress-ng:latest
+    args: ["--cpu", "4", "--cpu-method", "matrixprod", "--timeout", "600s"]
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "64Mi"
+      limits:
+        cpu: "200m"   # Límite bajo a propósito → run queue se saturará
+        memory: "128Mi"

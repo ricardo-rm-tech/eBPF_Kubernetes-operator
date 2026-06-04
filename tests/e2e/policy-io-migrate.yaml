@@ -1,0 +1,20 @@
+# Política IO: migra el PVC del pod a una StorageClass más rápida.
+# NOTA: requiere que la StorageClass "fast-nvme" exista en el clúster.
+# Si no existe, el operator devuelve error y el test cae al fallback EvictAndTaint.
+apiVersion: autoremediation.tfg.local/v1alpha1
+kind: IORemediationPolicy
+metadata:
+  name: e2e-io-migrate
+  namespace: default
+spec:
+  targetPodSelector:
+    matchLabels:
+      app: victim
+      saturation-type: io
+  prometheusEndpoint: "http://prometheus.default.svc.cluster.local:9090"
+  metricType: "IO"
+  evaluationWindow: "30s"
+  latencyThreshold: "10ms"
+  action: "MigrateStorageClass"
+  migrateStorageConfig:
+    targetStorageClass: "fast-nvme"

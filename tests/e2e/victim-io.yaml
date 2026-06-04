@@ -1,0 +1,41 @@
+# Pod víctima que satura el subsistema de I/O de bloque para disparar
+# ebpf_block_io_latency_ns_total. Usa fio con direct=1 para evitar el caché
+# de página y forzar peticiones reales al device.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: victim-io
+  namespace: default
+  labels:
+    app: victim
+    saturation-type: io
+spec:
+  restartPolicy: Never
+  containers:
+  - name: fio
+    image: ljishen/fio:latest
+    args:
+      - "--name=saturation"
+      - "--filename=/data/testfile"
+      - "--rw=randwrite"
+      - "--bs=4k"
+      - "--size=512M"
+      - "--numjobs=4"
+      - "--iodepth=32"
+      - "--direct=1"
+      - "--runtime=600"
+      - "--time_based=1"
+      - "--group_reporting"
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    emptyDir: {}

@@ -1,0 +1,21 @@
+# Política CPU: ante saturación del Run Queue, escala verticalmente in-place
+# el límite de CPU del pod. Si llega al MaxCPULimit cae al fallback EvictAndTaint
+# (configurado en el reconciler).
+apiVersion: autoremediation.tfg.local/v1alpha1
+kind: IORemediationPolicy
+metadata:
+  name: e2e-cpu-scaleup
+  namespace: default
+spec:
+  targetPodSelector:
+    matchLabels:
+      app: victim
+      saturation-type: cpu
+  prometheusEndpoint: "http://prometheus.default.svc.cluster.local:9090"
+  metricType: "CPU"
+  evaluationWindow: "30s"
+  latencyThreshold: "5ms"   # umbral bajo: el RunQ se satura muy por encima
+  action: "ScaleUp"
+  scaleUpConfig:
+    cpuStepPercent: 50
+    maxCpuLimit: "500m"

@@ -51,7 +51,16 @@ var _ = Describe("IORemediationPolicy Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: autoremediationv1alpha1.IORemediationPolicySpec{
+						TargetPodSelector: metav1.LabelSelector{
+							MatchLabels: map[string]string{"app": "test"},
+						},
+						PrometheusEndpoint: "http://localhost:9090",
+						MetricType:         "IO",
+						LatencyThreshold:   "50ms",
+						EvaluationWindow:   "5m",
+						Action:             "EvictAndTaint",
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -66,19 +75,34 @@ var _ = Describe("IORemediationPolicy Controller", func() {
 			By("Cleanup the specific resource instance IORemediationPolicy")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
+		It("should mark the policy Degraded when Prometheus is unreachable", func() {
+			By("Reconciling against an unreachable Prometheus endpoint")
 			controllerReconciler := &IORemediationPolicyReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}
 
+			// El endpoint apunta a localhost:9090 que no existe en envtest.
+			// Esperamos que el reconciler devuelva el error de Prometheus
+			// y marque la condición Degraded en el status, sin panicar.
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
-			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			Expect(err).To(HaveOccurred(), "expected reconcile to surface Prometheus error")
+
+			updated := &autoremediationv1alpha1.IORemediationPolicy{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+
+			var degraded *metav1.Condition
+			for i := range updated.Status.Conditions {
+				if updated.Status.Conditions[i].Type == "Degraded" {
+					degraded = &updated.Status.Conditions[i]
+					break
+				}
+			}
+			Expect(degraded).NotTo(BeNil(), "expected Degraded condition to be set")
+			Expect(degraded.Status).To(Equal(metav1.ConditionTrue))
+			Expect(degraded.Reason).To(Equal("EvaluationFailed"))
 		})
 	})
 })

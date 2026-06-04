@@ -77,11 +77,12 @@ int BPF_PROG(sched_switch, bool preempt, struct task_struct *prev, struct task_s
     struct cgroup_runq_stats_t *stats, zero = {};
 
     /*
-     * Si prev sigue runnable (TASK_RUNNING), ha sido preempted: re-encola
-     * y empieza a contar tiempo en runqueue para él también.
+     * Si prev sigue runnable (estado 0 == TASK_RUNNING), ha sido preempted:
+     * re-encola y empieza a contar tiempo en runqueue para él también.
+     * No usamos la macro TASK_RUNNING porque no se exporta en vmlinux.h.
      */
     long prev_state = BPF_CORE_READ(prev, __state);
-    if (prev_state == TASK_RUNNING) {
+    if (prev_state == 0) {
         struct runq_key_t pkey = {};
         u64 now = bpf_ktime_get_ns();
         fill_key(&pkey, prev);
