@@ -4,7 +4,14 @@ set -euo pipefail
 # =========================
 # CONFIGURACIÓN
 # =========================
-PROJECT_ROOT="${HOME}/tfg"
+# Derivamos PROJECT_ROOT de la ubicación del propio script para que funcione
+# aunque se invoque con sudo (donde $HOME apunta a /root) o desde otro cwd.
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# El home real del usuario que invocó sudo (no /root) — necesario para Prometheus.
+REAL_HOME="${SUDO_USER:+$(getent passwd "${SUDO_USER}" | cut -d: -f6)}"
+REAL_HOME="${REAL_HOME:-${HOME}}"
+
 EBPF_DIR="${PROJECT_ROOT}/ebpf"
 COLLECTOR_DIR="${PROJECT_ROOT}/collector"
 BPF_PIN_DIR="/sys/fs/bpf/block_latency"
@@ -12,7 +19,7 @@ BPF_OBJECT="block_latency.o"
 RUNQ_PIN_DIR="/sys/fs/bpf/runq_latency"
 RUNQ_OBJECT="runq_latency.o"
 
-PROM_DIR="${HOME}/prometheus-lab"
+PROM_DIR="${REAL_HOME}/prometheus-lab"
 PROM_PATTERN="prometheus-*.linux-amd64"
 START_PROMETHEUS="${1:-no}"   # usar: ./start_system.sh yes
 
@@ -92,9 +99,33 @@ for d in "${BPF_PIN_DIR}" "${RUNQ_PIN_DIR}"; do
   fi
 done
 
-if ! sudo bpftool prog show pinned "${BPF_PIN_DIR}/block_rq_issue" >/dev/null 2>&1 \
-   && ! sudo bpftool prog show pinned "${BPF_PIN_DIR}/handle_block_rq_issue" >/dev/null 2>&1; then
-  warn "No se ha encontrado el programa block_rq_issue cargado y attached"
+# Verifica que los programas eBPF están pineados en bpffs.
+# bpftool pinea cada programa como un fichero dentro del directorio de pin,
+# con el nombre de la función (BPF_PROG(name,...) en el .c).
+# Aceptamos cualquier nombre conocido para tolerar refactors del .c.
+check_pinned_program() {
+  local dir=$1
+  shift
+  local found=0
+  for name in "$@"; do
+    if sudo test -e "${dir}/${name}"; then
+      found=1
+      break
+    fi
+  done
+  echo "${found}"
+}
+
+if [[ "$(check_pinned_program "${BPF_PIN_DIR}" block_rq_issue handle_block_rq_issue)" -eq 0 ]]; then
+  warn "No se ha encontrado el programa block_rq_issue pineado en ${BPF_PIN_DIR}"
+  warn "  ¿Está el .o desactualizado? Recompila con:"
+  warn "    cd ebpf/latency && clang -O2 -g -target bpf -D__TARGET_ARCH_x86 -I.. -c block_latency.c -o ../block_latency.o"
+fi
+
+if [[ "$(check_pinned_program "${RUNQ_PIN_DIR}" sched_switch sched_wakeup handle_sched_switch)" -eq 0 ]]; then
+  warn "No se ha encontrado ningún programa de runq_latency pineado en ${RUNQ_PIN_DIR}"
+  warn "  ¿Está el .o desactualizado? Recompila con:"
+  warn "    cd ebpf/latency && clang -O2 -g -target bpf -D__TARGET_ARCH_x86 -I.. -c runq_latency.c -o ../runq_latency.o"
 fi
 
 log "Contenido de bpffs para block_latency"
