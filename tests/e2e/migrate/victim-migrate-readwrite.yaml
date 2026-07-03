@@ -1,0 +1,69 @@
+# Escenario B — Rechazo SEGURO (volumen de lectura/escritura con datos).
+#
+# Deployment con un PVC en slow-usb (USB) montado en modo escritura, donde fio
+# genera I/O. El operador detecta la saturación pero, al ver que el volumen es
+# escribible (contiene datos que se perderían), ABORTA la migración de forma
+# segura → la policy queda Degraded con un mensaje claro. Demuestra la
+# salvaguarda anti-pérdida-de-datos.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: victim-migrate-rw-data
+  namespace: default
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: slow-usb
+  resources:
+    requests:
+      storage: 512Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: victim-migrate-rw
+  namespace: default
+  labels:
+    app: victim
+    saturation-type: io
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: victim
+      saturation-type: io
+  template:
+    metadata:
+      labels:
+        app: victim
+        saturation-type: io
+    spec:
+      tolerations:
+      - key: "autoremediation.tfg.local/saturation"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: fio
+        image: ljishen/fio:latest
+        args:
+          - "--name=saturation"
+          - "--filename=/data/testfile"
+          - "--rw=randwrite"
+          - "--bs=4k"
+          - "--size=128M"
+          - "--numjobs=1"
+          - "--iodepth=4"           # bajo: la USB lenta encola en RAM si es alto (OOM)
+          - "--direct=1"
+          - "--runtime=600"
+          - "--time_based=1"
+          - "--group_reporting"
+        volumeMounts:
+        - name: data
+          mountPath: /data          # ← escribible (sin readOnly) → NO migrable
+        resources:
+          requests: { cpu: "100m", memory: "128Mi" }
+          limits:   { cpu: "500m", memory: "512Mi" }
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: victim-migrate-rw-data

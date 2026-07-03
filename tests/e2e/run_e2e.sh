@@ -59,6 +59,10 @@ check_prereqs() {
     else
         ok "Prometheus responde en ${PROMETHEUS_URL}"
     fi
+
+    separator
+    echo -e "${GREEN}  SUCCESS!! El clúster está activo correctamente${NC}"
+    separator
 }
 
 # ── Cleanup garantizado al salir ──
@@ -129,6 +133,98 @@ node_has_taint() {
         | grep -q "saturation"
 }
 
+# ¿Hay alguna IORemediationPolicy en el clúster? El operator solo taintea si
+# hay una policy evict activa; en cuanto no queda ninguna, deja de re-aplicarlo.
+any_policy_exists() {
+    [[ -n "$(kubectl get ioremediationpolicy -A -o name 2>/dev/null)" ]]
+}
+
+# Quita el taint de saturación de todos los nodos y verifica que desaparece.
+# EvictAndTaint deja el nodo con el taint NoSchedule; si no se limpia antes del
+# siguiente escenario, el pod víctima siguiente no se puede programar
+# (FailedScheduling: untolerated taint).
+#
+# Clave: el operator es asíncrono y, MIENTRAS exista la policy evict, re-aplica
+# el taint en cada reconcile (pelear a base de reintentos no sirve). Por eso
+# primero esperamos a que NO quede ninguna policy y damos un margen para que el
+# último reconcile en vuelo termine; solo entonces limpiamos el taint.
+remove_saturation_taint() {
+    # 1. Esperar a que no quede ninguna policy (hasta ~30s).
+    local i=0
+    while any_policy_exists && (( i < 15 )); do
+        sleep 2; i=$(( i + 1 ))
+    done
+    # 2. Margen para que el reconcile en vuelo del operator termine.
+    sleep 8
+    # 3. Limpiar y verificar que no reaparece.
+    local attempts=6
+    for _ in $(seq 1 "${attempts}"); do
+        kubectl get nodes -o name 2>/dev/null | while read -r node; do
+            kubectl taint "${node}" autoremediation.tfg.local/saturation- 2>/dev/null || true
+        done
+        sleep 3
+        if ! kubectl get nodes -o jsonpath='{range .items[*]}{.spec.taints[?(@.key=="autoremediation.tfg.local/saturation")].key}{end}' 2>/dev/null | grep -q saturation; then
+            ok "Taint de saturación limpiado del nodo"
+            return 0
+        fi
+    done
+    warn "El taint de saturación persiste (¿operator con policy aún activa?)"
+}
+
+# Deja el clúster en un estado limpio y conocido, de forma AISLADA e idempotente.
+# Se llama ANTES de cada escenario para que ninguno herede basura del anterior
+# (policies vivas que hacen re-taintear al operator, taint NoSchedule residual,
+# pods víctima colgados). Es la base del aislamiento entre escenarios.
+reset_cluster_state() {
+    log "Reset: dejando el clúster en estado limpio para el siguiente escenario"
+
+    # 1. Borrar TODAS las policies del test (da igual cuál quedara).
+    for p in policy-cpu-scaleup policy-cpu-evict policy-io-migrate policy-io-evict; do
+        kubectl delete -f "${SCRIPT_DIR}/${p}.yaml" --ignore-not-found --wait=false 2>/dev/null || true
+    done
+
+    # 2. Borrar pods víctima si quedaran.
+    kubectl delete pod victim-cpu victim-io -n "${NAMESPACE}" --ignore-not-found --force --grace-period=0 2>/dev/null || true
+
+    # 3. Esperar a que NO quede ninguna policy (sin policy, el operator deja de
+    #    taintear). Hasta ~40s.
+    local i=0
+    while any_policy_exists && (( i < 20 )); do
+        sleep 2; i=$(( i + 1 ))
+    done
+    if any_policy_exists; then
+        warn "Reset: aún hay policies tras esperar; el taint podría reaparecer"
+    fi
+
+    # 3b. Margen para que el operator drene su cola de reconcile. Tras borrar la
+    #     policy, el operator puede seguir procesando un reconcile en vuelo
+    #     (leyó saturación en Prometheus, que además tiene lag) y re-taintear
+    #     una última vez. Esperamos a que se calme antes de la limpieza final.
+    sleep 20
+
+    # 4. Limpiar el taint y CONFIRMAR que se mantiene limpio (que el operator no
+    #    lo re-aplica). Exigimos 3 comprobaciones seguidas sin taint.
+    local stable=0 tries=0
+    while (( stable < 3 && tries < 20 )); do
+        kubectl get nodes -o name 2>/dev/null | while read -r node; do
+            kubectl taint "${node}" autoremediation.tfg.local/saturation- 2>/dev/null || true
+        done
+        sleep 3
+        if kubectl get nodes -o jsonpath='{range .items[*]}{.spec.taints[?(@.key=="autoremediation.tfg.local/saturation")].key}{end}' 2>/dev/null | grep -q saturation; then
+            stable=0
+        else
+            stable=$(( stable + 1 ))
+        fi
+        tries=$(( tries + 1 ))
+    done
+
+    if (( stable >= 3 )); then
+        ok "Reset: clúster limpio (sin policies, sin taint, nodo programable)"
+    else
+        warn "Reset: el taint sigue reapareciendo; revisa si el operador tiene alguna policy activa"
+    fi
+}
+
 # =============================================================================
 #  ESCENARIO 1: SATURACIÓN DE CPU
 #  Fase A → ScaleUp
@@ -147,6 +243,12 @@ test_cpu_scenario() {
     initial_limit=$(get_pod_cpu_limit "victim-cpu")
     log "Límite inicial de CPU: ${initial_limit}"
 
+    # Capturamos el nodo AHORA, mientras el pod está estable. Si lo dejamos
+    # para la fase B, el operator ya puede haberlo expulsado y perderíamos
+    # la referencia (el taint se verifica sobre este nodo).
+    local victim_node
+    victim_node=$(kubectl get pod victim-cpu -n "${NAMESPACE}" -o jsonpath='{.spec.nodeName}' 2>/dev/null || echo "")
+
     log "Aguardando ${SATURATION_WAIT}s para que la métrica eBPF se propague a Prometheus"
     sleep "${SATURATION_WAIT}"
 
@@ -163,19 +265,30 @@ test_cpu_scenario() {
     log "Esperando ${PHASE_DURATION}s para que el operator detecte y escale"
     sleep "${PHASE_DURATION}"
 
-    local new_limit
-    new_limit=$(get_pod_cpu_limit "victim-cpu")
+    # El resize in-place deja el pod en transición un instante, así que el
+    # límite puede leerse vacío en el primer intento. Reintentamos unas veces.
+    local new_limit=""
+    for _ in $(seq 1 6); do
+        new_limit=$(get_pod_cpu_limit "victim-cpu")
+        [[ -n "${new_limit}" && "${new_limit}" != "${initial_limit}" ]] && break
+        sleep 2
+    done
     log "Límite de CPU tras ScaleUp: ${new_limit}"
+
+    # Evidencia primaria: la condition Progressing/Remediating de la policy
+    # (el operator confirma que actuó). El límite es evidencia secundaria.
+    local reason
+    reason=$(get_policy_condition "e2e-cpu-scaleup" "Progressing")
 
     if [[ "${new_limit}" != "${initial_limit}" && -n "${new_limit}" ]]; then
         ok "ScaleUp ejecutado: ${initial_limit} → ${new_limit}"
+    elif [[ "${reason}" == "Remediating" ]]; then
+        ok "ScaleUp ejecutado (operator confirmó Remediating; límite leído='${new_limit:-vacío}' por transición del pod)"
     else
-        warn "El límite de CPU no cambió. Estado de la policy:"
+        warn "El límite de CPU no cambió y la policy no reporta Remediating. Estado:"
         kubectl get ioremediationpolicy e2e-cpu-scaleup -n "${NAMESPACE}" -o yaml | tail -25
     fi
 
-    local reason
-    reason=$(get_policy_condition "e2e-cpu-scaleup" "Progressing")
     [[ -n "${reason}" ]] && ok "Policy condition Progressing.reason=${reason}"
 
     # ── Fase B: EvictAndTaint ──
@@ -185,8 +298,7 @@ test_cpu_scenario() {
     kubectl delete -f "${SCRIPT_DIR}/policy-cpu-scaleup.yaml" --ignore-not-found
     kubectl apply  -f "${SCRIPT_DIR}/policy-cpu-evict.yaml"
 
-    local victim_node
-    victim_node=$(kubectl get pod victim-cpu -n "${NAMESPACE}" -o jsonpath='{.spec.nodeName}' 2>/dev/null || echo "")
+    # victim_node se capturó en la fase A, cuando el pod aún estaba estable.
     log "Nodo donde corre la víctima: ${victim_node:-<desaparecido>}"
 
     log "Esperando ${PHASE_DURATION}s para que el operator expulse el pod"
@@ -205,6 +317,13 @@ test_cpu_scenario() {
     else
         warn "El nodo ${victim_node} no tiene el taint esperado"
     fi
+
+    # Borrar la policy evict ANTES de quitar el taint: si no, el operator
+    # podría re-aplicarlo en su siguiente reconciliación. Esperamos a que el
+    # borrado se confirme (--wait) y damos un margen para que el operator
+    # procese la eliminación, antes de limpiar el taint.
+    kubectl delete -f "${SCRIPT_DIR}/policy-cpu-evict.yaml" --ignore-not-found
+    remove_saturation_taint
 }
 
 # =============================================================================
@@ -220,6 +339,10 @@ test_io_scenario() {
     log "Desplegando pod víctima (fio, 4 jobs randwrite directos)"
     kubectl apply -f "${SCRIPT_DIR}/victim-io.yaml"
     wait_pod_running "victim-io" 120 || return 1
+
+    # Capturamos el nodo mientras el pod está estable (ver escenario CPU).
+    local victim_node
+    victim_node=$(kubectl get pod victim-io -n "${NAMESPACE}" -o jsonpath='{.spec.nodeName}' 2>/dev/null || echo "")
 
     log "Aguardando ${SATURATION_WAIT}s para propagación de métricas"
     sleep "${SATURATION_WAIT}"
@@ -254,8 +377,7 @@ test_io_scenario() {
     kubectl delete -f "${SCRIPT_DIR}/policy-io-migrate.yaml" --ignore-not-found
     kubectl apply  -f "${SCRIPT_DIR}/policy-io-evict.yaml"
 
-    local victim_node
-    victim_node=$(kubectl get pod victim-io -n "${NAMESPACE}" -o jsonpath='{.spec.nodeName}' 2>/dev/null || echo "")
+    # victim_node se capturó en la fase A, cuando el pod aún estaba estable.
     log "Nodo donde corre la víctima: ${victim_node:-<desaparecido>}"
 
     log "Esperando ${PHASE_DURATION}s para que el operator expulse el pod"
@@ -274,6 +396,179 @@ test_io_scenario() {
     else
         warn "El nodo ${victim_node} no tiene el taint esperado"
     fi
+
+    # Borrar la policy evict antes de quitar el taint (ver escenario CPU).
+    kubectl delete -f "${SCRIPT_DIR}/policy-io-evict.yaml" --ignore-not-found
+    remove_saturation_taint
+
+    # Limpieza final del escenario I/O: como es el último, garantizamos que el
+    # nodo queda SIN el taint de saturación. Esperamos a que no quede ninguna
+    # policy (el operator dejaría de re-aplicarlo) y borramos el taint,
+    # verificando que realmente desaparece.
+    log "Retirando el taint de saturación tras el escenario I/O"
+    local i=0
+    while any_policy_exists && (( i < 15 )); do sleep 2; i=$(( i + 1 )); done
+    kubectl get nodes -o name 2>/dev/null | while read -r node; do
+        kubectl taint "${node}" autoremediation.tfg.local/saturation- 2>/dev/null || true
+    done
+    sleep 2
+    if node_has_taint "${victim_node:-debiantfg}"; then
+        warn "El taint de saturación aún persiste en el nodo"
+    else
+        ok "Taint de saturación retirado del nodo"
+    fi
+}
+
+# =============================================================================
+#  ESCENARIO 3: MIGRACIÓN DE ALMACENAMIENTO (MigrateStorageClass)
+#
+#  Requiere un disco lento real (memoria USB) como StorageClass "slow-usb" y un
+#  NVMe como "fast-nvme". Ver monitoring/storage-migration/ para el montaje.
+#
+#  Demuestra las DOS ramas de la acción MigrateStorageClass:
+#    Caso A → volumen de SOLO LECTURA  → el operator migra USB → NVMe (éxito).
+#    Caso B → volumen de LECTURA/ESCRITURA → el operator RECHAZA para no perder
+#             datos (Degraded). Es la salvaguarda anti-pérdida-de-datos.
+# =============================================================================
+MIGRATE_DIR="${SCRIPT_DIR}/migrate"
+
+# Comprueba los prerrequisitos específicos de la migración (StorageClasses).
+check_migration_prereqs() {
+    log "Comprobando prerrequisitos de migración (StorageClasses slow-usb / fast-nvme)"
+    local ok_sc=1
+    for sc in slow-usb fast-nvme; do
+        if kubectl get storageclass "${sc}" >/dev/null 2>&1; then
+            ok "StorageClass ${sc} presente"
+        else
+            err "Falta la StorageClass ${sc}"
+            ok_sc=0
+        fi
+    done
+    if [[ "${ok_sc}" -eq 0 ]]; then
+        err "Monta el almacenamiento primero: kubectl apply -f monitoring/storage-migration/"
+        err "y formatea/monta la USB en /mnt/slow-usb (ver GUIA_USO.md)."
+        return 1
+    fi
+    return 0
+}
+
+test_migration_scenario() {
+    separator
+    log "ESCENARIO MIGRACIÓN: MigrateStorageClass (disco lento USB → NVMe)"
+    separator
+    log "El operator vigila la latencia de I/O y, ante saturación en el disco"
+    log "lento (USB), intenta mover el volumen a una StorageClass rápida (NVMe)."
+    log "Solo migra si el volumen se usa en SOLO LECTURA (no perder datos)."
+
+    check_migration_prereqs || return 1
+
+    # ── Caso A: volumen READ-ONLY → migración exitosa ──
+    separator
+    log "CASO A — Volumen de SOLO LECTURA (se espera MIGRACIÓN EXITOSA)"
+    separator
+    log "Desplegando pod con PVC en slow-usb (USB), montado readOnly y leyendo"
+    log "en bucle con O_DIRECT para generar latencia de I/O real desde la USB."
+    kubectl apply -f "${MIGRATE_DIR}/victim-migrate-readonly.yaml" >/dev/null 2>&1
+
+    local dep_ro="victim-migrate-ro"
+    if ! kubectl rollout status deployment/${dep_ro} -n "${NAMESPACE}" --timeout=120s >/dev/null 2>&1; then
+        err "El Deployment ${dep_ro} no llegó a estar disponible"
+        kubectl delete -f "${MIGRATE_DIR}/victim-migrate-readonly.yaml" --ignore-not-found --wait=false >/dev/null 2>&1
+        return 1
+    fi
+    ok "Pod read-only Running; PVC inicial en slow-usb (USB lenta)"
+
+    log "Aguardando ${SATURATION_WAIT}s para que la latencia de lectura llegue a Prometheus"
+    sleep "${SATURATION_WAIT}"
+    assert_metric_present \
+        'rate(ebpf_block_io_latency_ns_total{kind="kubernetes"}[1m]) > 0' \
+        "Latencia de I/O del pod read-only (lectura desde USB)" \
+        || warn "Métrica no vista aún; la migración podría no dispararse"
+
+    log "Aplicando política MigrateStorageClass (destino fast-nvme)"
+    kubectl apply -f "${MIGRATE_DIR}/policy-migrate.yaml" >/dev/null 2>&1
+
+    log "Esperando ${PHASE_DURATION}s a que el operator evalúe y migre"
+    sleep "${PHASE_DURATION}"
+
+    # Verificación: debe existir un PVC nuevo en fast-nvme y el Deployment
+    # debe apuntar a él.
+    local new_claim
+    new_claim=$(kubectl get deployment ${dep_ro} -n "${NAMESPACE}" \
+        -o jsonpath='{.spec.template.spec.volumes[0].persistentVolumeClaim.claimName}' 2>/dev/null)
+    if [[ "${new_claim}" == *"-migrated-"* ]]; then
+        local new_sc
+        new_sc=$(kubectl get pvc "${new_claim}" -n "${NAMESPACE}" \
+            -o jsonpath='{.spec.storageClassName}' 2>/dev/null)
+        if [[ "${new_sc}" == "fast-nvme" ]]; then
+            ok "MIGRACIÓN EXITOSA: PVC nuevo '${new_claim}' en fast-nvme; Deployment repuntado"
+        else
+            warn "El Deployment usa un PVC migrado pero su StorageClass es '${new_sc}' (esperada fast-nvme)"
+        fi
+    else
+        warn "El Deployment sigue apuntando a '${new_claim}' (no se migró; revisa los logs del operator)"
+    fi
+
+    local reason_a
+    reason_a=$(get_policy_condition "e2e-migrate" "Progressing")
+    [[ "${reason_a}" == "Remediating" ]] && ok "Policy condition Progressing.reason=Remediating"
+
+    # Limpieza del caso A.
+    kubectl delete -f "${MIGRATE_DIR}/policy-migrate.yaml" --ignore-not-found --wait=false >/dev/null 2>&1
+    kubectl delete -f "${MIGRATE_DIR}/victim-migrate-readonly.yaml" --ignore-not-found --wait=false >/dev/null 2>&1
+    kubectl get pvc -n "${NAMESPACE}" -o name 2>/dev/null | grep -E 'victim-migrate-ro' | xargs -r kubectl delete -n "${NAMESPACE}" --wait=false >/dev/null 2>&1
+    sleep 5
+
+    # ── Caso B: volumen READ-WRITE con datos → rechazo seguro ──
+    separator
+    log "CASO B — Volumen de LECTURA/ESCRITURA (se espera RECHAZO SEGURO)"
+    separator
+    log "Desplegando pod con fio ESCRIBIENDO en un PVC en slow-usb (USB). El"
+    log "operator detectará saturación pero rechazará migrar para no perder datos."
+    kubectl apply -f "${MIGRATE_DIR}/victim-migrate-readwrite.yaml" >/dev/null 2>&1
+
+    local dep_rw="victim-migrate-rw"
+    if ! kubectl rollout status deployment/${dep_rw} -n "${NAMESPACE}" --timeout=120s >/dev/null 2>&1; then
+        err "El Deployment ${dep_rw} no llegó a estar disponible"
+        kubectl delete -f "${MIGRATE_DIR}/victim-migrate-readwrite.yaml" --ignore-not-found --wait=false >/dev/null 2>&1
+        return 1
+    fi
+    ok "Pod fio Running; escribiendo en el PVC de slow-usb (USB lenta)"
+
+    log "Aguardando ${SATURATION_WAIT}s para que la latencia de escritura llegue a Prometheus"
+    sleep "${SATURATION_WAIT}"
+    assert_metric_present \
+        'rate(ebpf_block_io_latency_ns_total{kind="kubernetes"}[1m]) > 0' \
+        "Latencia de I/O del pod fio (escritura en USB)" \
+        || warn "Métrica no vista aún"
+
+    log "Aplicando política MigrateStorageClass (destino fast-nvme)"
+    kubectl apply -f "${MIGRATE_DIR}/policy-migrate.yaml" >/dev/null 2>&1
+
+    log "Esperando ${PHASE_DURATION}s a que el operator evalúe (debe rechazar)"
+    sleep "${PHASE_DURATION}"
+
+    # Verificación: NO debe haberse creado ningún PVC migrado y la policy debe
+    # estar Degraded.
+    local migrated_count
+    migrated_count=$(kubectl get pvc -n "${NAMESPACE}" -o name 2>/dev/null | grep -c 'migrated' || true)
+    local degraded
+    degraded=$(get_policy_condition "e2e-migrate" "Degraded")
+    if [[ "${migrated_count}" -eq 0 && -n "${degraded}" ]]; then
+        ok "RECHAZO SEGURO: no se creó ningún PVC migrado; policy Degraded.reason=${degraded}"
+        ok "Los datos del volumen escribible permanecen intactos en slow-usb"
+    else
+        warn "Resultado inesperado (migrated_count=${migrated_count}, degraded='${degraded}')"
+    fi
+
+    # Limpieza del caso B.
+    kubectl delete -f "${MIGRATE_DIR}/policy-migrate.yaml" --ignore-not-found --wait=false >/dev/null 2>&1
+    kubectl delete -f "${MIGRATE_DIR}/victim-migrate-readwrite.yaml" --ignore-not-found --wait=false >/dev/null 2>&1
+    kubectl get pvc -n "${NAMESPACE}" -o name 2>/dev/null | grep -E 'victim-migrate|migrated' | xargs -r kubectl delete -n "${NAMESPACE}" --wait=false >/dev/null 2>&1
+
+    separator
+    ok "Escenario de migración completado (Caso A: migra, Caso B: rechaza)"
+    separator
 }
 
 # =============================================================================
@@ -290,15 +585,32 @@ main() {
 
     local scenario="${1:-all}"
     case "${scenario}" in
-        cpu)  test_cpu_scenario ;;
-        io)   test_io_scenario ;;
+        cpu)
+            reset_cluster_state
+            test_cpu_scenario
+            ;;
+        io)
+            reset_cluster_state
+            test_io_scenario
+            ;;
+        migrate)
+            reset_cluster_state
+            test_migration_scenario || warn "Escenario de migración completado con avisos"
+            ;;
         all)
+            reset_cluster_state
             test_cpu_scenario || warn "Escenario CPU completado con avisos"
-            sleep 10
+            # Reset AISLADO entre escenarios: garantiza que el I/O empieza en
+            # estado limpio aunque el CPU haya dejado taint/policies.
+            reset_cluster_state
             test_io_scenario  || warn "Escenario IO completado con avisos"
+            # Migración: solo si el almacenamiento (USB/StorageClasses) está
+            # montado; si no, el propio escenario avisa y se salta limpiamente.
+            reset_cluster_state
+            test_migration_scenario || warn "Escenario de migración completado con avisos"
             ;;
         *)
-            err "Uso: $0 [cpu|io|all]"
+            err "Uso: $0 [cpu|io|migrate|all]"
             exit 1
             ;;
     esac

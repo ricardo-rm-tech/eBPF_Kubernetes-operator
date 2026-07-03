@@ -11,6 +11,12 @@ metadata:
     saturation-type: io
 spec:
   restartPolicy: Never
+  # Tolera el taint del operator (EvictAndTaint) para poder programarse aunque
+  # el escenario CPU haya dejado el nodo tainteado. Ver victim-cpu.yaml.
+  tolerations:
+  - key: "autoremediation.tfg.local/saturation"
+    operator: "Exists"
+    effect: "NoSchedule"
   containers:
   - name: fio
     image: ljishen/fio:latest

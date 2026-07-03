@@ -9,10 +9,10 @@ spec:
     matchLabels:
       app: victim
       saturation-type: io
-  prometheusEndpoint: "http://prometheus.default.svc.cluster.local:9090"
+  prometheusEndpoint: "http://localhost:9090"
   metricType: "IO"
   evaluationWindow: "30s"
   latencyThreshold: "10ms"
   action: "EvictAndTaint"
   evictAndTaintConfig:
-    taintDuration: "5m"
+    taintDuration: "3m"

@@ -1,0 +1,88 @@
+# Segundo local-path-provisioner dedicado a la USB (disco lento).
+# Aprovisiona en /mnt/slow-usb y se identifica como rancher.io/local-path-usb,
+# de modo que la StorageClass slow-usb lo use a él y no al provisioner del NVMe.
+# Reutiliza la ServiceAccount/RBAC creados por el provisioner base.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: local-path-config-usb
+  namespace: local-path-storage
+data:
+  config.json: |
+    {
+      "nodePathMap":[
+        {
+          "node":"DEFAULT_PATH_FOR_NON_LISTED_NODES",
+          "paths":["/mnt/slow-usb"]
+        }
+      ]
+    }
+  setup: |
+    #!/bin/sh
+    set -eu
+    mkdir -m 0777 -p "$VOL_DIR"
+  teardown: |
+    #!/bin/sh
+    set -eu
+    rm -rf "$VOL_DIR"
+  helperPod.yaml: |
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: helper-pod
+    spec:
+      priorityClassName: system-node-critical
+      tolerations:
+        - key: node.kubernetes.io/disk-pressure
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: helper-pod
+          image: busybox
+          imagePullPolicy: IfNotPresent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: local-path-provisioner-usb
+  namespace: local-path-storage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: local-path-provisioner-usb
+  template:
+    metadata:
+      labels:
+        app: local-path-provisioner-usb
+    spec:
+      serviceAccountName: local-path-provisioner-service-account
+      containers:
+        - name: local-path-provisioner
+          image: rancher/local-path-provisioner:v0.0.30
+          imagePullPolicy: IfNotPresent
+          command:
+            - local-path-provisioner
+            - --debug
+            - start
+            - --config
+            - /etc/config/config.json
+            - --provisioner-name
+            - rancher.io/local-path-usb
+            - --configmap-name
+            - local-path-config-usb
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/config/
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CONFIG_MOUNT_PATH
+              value: /etc/config/
+      volumes:
+        - name: config-volume
+          configMap:
+            name: local-path-config-usb

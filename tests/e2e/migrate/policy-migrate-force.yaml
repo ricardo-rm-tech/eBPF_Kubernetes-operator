@@ -1,0 +1,24 @@
+# Policy de migración con umbral ~0 para el escenario A (migración exitosa).
+#
+# El pod read-only apenas genera I/O, así que su latencia no supera un umbral
+# normal. Con umbral 1ns, cualquier pod objetivo con actividad mínima se
+# considera "saturado" y dispara la acción MigrateStorageClass. Sirve para
+# demostrar el happy-path de la migración (volumen read-only → migra a fast-nvme)
+# sin depender de generar latencia real en un volumen de solo lectura.
+apiVersion: autoremediation.tfg.local/v1alpha1
+kind: IORemediationPolicy
+metadata:
+  name: e2e-migrate
+  namespace: default
+spec:
+  targetPodSelector:
+    matchLabels:
+      app: victim
+      saturation-type: io
+  prometheusEndpoint: "http://localhost:9090"
+  metricType: "IO"
+  evaluationWindow: "30s"
+  latencyThreshold: "1ns"
+  action: "MigrateStorageClass"
+  migrateStorageConfig:
+    targetStorageClass: "fast-nvme"

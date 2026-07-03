@@ -1,0 +1,12 @@
+"/home/richi/tfg/operator/bin/controller-gen" rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+"/home/richi/tfg/operator/bin/controller-gen" object:headerFile="hack/boilerplate.go.txt" paths="./..."
+go fmt ./...
+go vet ./...
+Setting up envtest binaries for Kubernetes version 1.35...
+/home/richi/tfg/operator/bin/k8s/1.35.0-linux-amd64KUBEBUILDER_ASSETS="/home/richi/tfg/operator/bin/k8s/1.35.0-linux-amd64" go test $(go list ./... | grep -v /e2e) -coverprofile cover.out
+	github.com/richi/tfg/operator/api/v1alpha1		coverage: 0.0% of statements
+	github.com/richi/tfg/operator/cmd		coverage: 0.0% of statements
+ok  	github.com/richi/tfg/operator/internal/controller	6.387s	coverage: 29.8% of statements
+	github.com/richi/tfg/operator/pkg/action		coverage: 0.0% of statements
+	github.com/richi/tfg/operator/pkg/evaluator		coverage: 0.0% of statements
+	github.com/richi/tfg/operator/test/utils		coverage: 0.0% of statements

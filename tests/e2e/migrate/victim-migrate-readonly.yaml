@@ -1,0 +1,68 @@
+# Escenario A — Migración EXITOSA (volumen de solo lectura con datos precargados).
+#
+# Un initContainer precarga datos en el PVC (montado escribible SOLO en el init).
+# El container principal monta el MISMO volumen en readOnly y lo lee en bucle,
+# generando I/O de lectura real (para que el operador lo detecte como saturado)
+# pero SIN escribir. Como el volumen se usa en solo lectura, el operador puede
+# migrarlo de forma segura de slow-usb a fast-nvme.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: victim-migrate-ro-data
+  namespace: default
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: slow-usb
+  resources:
+    requests:
+      storage: 200Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: victim-migrate-ro
+  namespace: default
+  labels:
+    app: victim
+    saturation-type: io
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: victim
+      saturation-type: io
+  template:
+    metadata:
+      labels:
+        app: victim
+        saturation-type: io
+    spec:
+      tolerations:
+      - key: "autoremediation.tfg.local/saturation"
+        operator: "Exists"
+        effect: "NoSchedule"
+      initContainers:
+      # Precarga datos en el volumen (única vez que se monta escribible).
+      - name: seed
+        image: busybox
+        command: ["sh", "-c", "dd if=/dev/urandom of=/data/blob bs=1M count=100 2>/dev/null; sync"]
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      containers:
+      # Lee el volumen en bucle con O_DIRECT en modo SOLO LECTURA.
+      - name: reader
+        image: busybox
+        command: ["sh", "-c", "while true; do dd if=/data/blob of=/dev/null bs=4k iflag=direct 2>/dev/null; done"]
+        volumeMounts:
+        - name: data
+          mountPath: /data
+          readOnly: true          # ← clave: volumen de SOLO LECTURA → migrable
+        resources:
+          requests: { cpu: "50m", memory: "64Mi" }
+          limits:   { cpu: "300m", memory: "128Mi" }
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: victim-migrate-ro-data

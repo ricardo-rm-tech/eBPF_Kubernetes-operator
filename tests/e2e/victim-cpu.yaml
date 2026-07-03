@@ -11,6 +11,15 @@ metadata:
     saturation-type: cpu
 spec:
   restartPolicy: Never
+  # Tolera el taint que aplica el operator (EvictAndTaint). Así el pod víctima
+  # se puede programar aunque un escenario anterior haya dejado el nodo con el
+  # taint autoremediation.tfg.local/saturation:NoSchedule. Elimina las carreras
+  # de timing entre escenarios (el operator puede re-aplicar el taint tras
+  # borrar la policy, pero ya no bloquea la programación de los pods del test).
+  tolerations:
+  - key: "autoremediation.tfg.local/saturation"
+    operator: "Exists"
+    effect: "NoSchedule"
   containers:
   - name: stress
     image: polinux/stress-ng:latest

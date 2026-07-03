@@ -59,12 +59,13 @@ func (a *MigrateStorageAction) Execute(ctx context.Context, podName string, name
 	// than only the first match.
 	type pvcRef struct {
 		volIndex int
+		volName  string
 		oldName  string
 	}
 	var refs []pvcRef
 	for i, vol := range deployment.Spec.Template.Spec.Volumes {
 		if vol.PersistentVolumeClaim != nil {
-			refs = append(refs, pvcRef{volIndex: i, oldName: vol.PersistentVolumeClaim.ClaimName})
+			refs = append(refs, pvcRef{volIndex: i, volName: vol.Name, oldName: vol.PersistentVolumeClaim.ClaimName})
 		}
 	}
 	if len(refs) == 0 {
@@ -85,19 +86,16 @@ func (a *MigrateStorageAction) Execute(ctx context.Context, podName string, name
 			continue
 		}
 
-		// Safety: this action does NOT copy data. Creating a fresh PVC against
-		// a non-empty source is data-destructive — refuse and let the operator
-		// fall back to another action.
-		if !pvcLooksEmpty(&oldPVC) {
-			return fmt.Errorf("PVC %s appears to hold data; refusing to migrate without a VolumeSnapshot/clone source", ref.oldName)
+		// Safety: esta acción NO copia datos. Solo es seguro migrar cuando el
+		// volumen se usa en modo SOLO LECTURA (nadie escribe en él), porque
+		// entonces re-aprovisionar el PVC en la clase destino no pierde
+		// escrituras en curso. Si el volumen es escribible, abortamos y dejamos
+		// que el operador use otra acción de fallback.
+		if !pvcUsedReadOnly(&oldPVC, &deployment, ref.volName) {
+			return fmt.Errorf("PVC %s se usa en modo lectura/escritura; se aborta la migración para no perder datos (solo se migran volúmenes de solo lectura)", ref.oldName)
 		}
 
 		newPVCName := fmt.Sprintf("%s-migrated-%d-%d", ref.oldName, stamp, idx)
-		dataSource := &corev1.TypedLocalObjectReference{
-			APIGroup: ptrString(""),
-			Kind:     "PersistentVolumeClaim",
-			Name:     ref.oldName,
-		}
 		newPVC := &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      newPVCName,
@@ -110,7 +108,6 @@ func (a *MigrateStorageAction) Execute(ctx context.Context, podName string, name
 				AccessModes:      oldPVC.Spec.AccessModes,
 				Resources:        oldPVC.Spec.Resources,
 				StorageClassName: &a.TargetStorageClass,
-				DataSource:       dataSource,
 			},
 		}
 
@@ -154,10 +151,48 @@ func findDeploymentOwner(ctx context.Context, c client.Client, pod *corev1.Pod) 
 	return "", fmt.Errorf("replicaset %s is not owned by a Deployment", rsName)
 }
 
-func pvcLooksEmpty(pvc *corev1.PersistentVolumeClaim) bool {
-	// Heuristic: a freshly-created PVC has no Phase=Bound usage history.
-	// Once bound and ever used, we conservatively refuse to wipe it.
-	return pvc.Status.Phase == corev1.ClaimPending
-}
+// pvcUsedReadOnly determina si es SEGURO migrar un PVC porque se usa en modo
+// solo lectura durante la ejecución normal (nadie escribe en él). Devuelve true si:
+//   - el PVC declara ReadOnlyMany y no permite escritura (RWO/RWX), o
+//   - todos los volumeMounts de los containers principales que montan ese
+//     volumen tienen readOnly: true.
+//
+// NOTA: los initContainers se ignoran a propósito. Un initContainer puede montar
+// el volumen escribible para precargar datos una sola vez antes del arranque;
+// eso no implica que la carga en ejecución escriba en él. Lo relevante para la
+// seguridad de la migración es el uso en runtime (containers principales).
+//
+// Si el volumen se monta como escribible en algún container principal, devuelve false.
+func pvcUsedReadOnly(pvc *corev1.PersistentVolumeClaim, deployment *appsv1.Deployment, volName string) bool {
+	// 1) A nivel de PVC: ReadOnlyMany sin ningún modo de escritura.
+	writable := false
+	readOnlyMany := false
+	for _, m := range pvc.Spec.AccessModes {
+		switch m {
+		case corev1.ReadWriteOnce, corev1.ReadWriteMany, corev1.ReadWriteOncePod:
+			writable = true
+		case corev1.ReadOnlyMany:
+			readOnlyMany = true
+		}
+	}
+	if readOnlyMany && !writable {
+		return true
+	}
 
-func ptrString(s string) *string { return &s }
+	// 2) A nivel de pod: todos los mounts de este volumen en los containers
+	//    principales son readOnly (los initContainers se ignoran, ver NOTA).
+	mounted := false
+	for _, c := range deployment.Spec.Template.Spec.Containers {
+		for _, vm := range c.VolumeMounts {
+			if vm.Name == volName {
+				mounted = true
+				if !vm.ReadOnly {
+					return false // se monta escribible en un container principal
+				}
+			}
+		}
+	}
+
+	// Solo lo consideramos seguro si realmente se monta (y siempre readOnly).
+	return mounted
+}

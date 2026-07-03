@@ -1,10 +1,12 @@
-# Política IO: migra el PVC del pod a una StorageClass más rápida.
-# NOTA: requiere que la StorageClass "fast-nvme" exista en el clúster.
-# Si no existe, el operator devuelve error y el test cae al fallback EvictAndTaint.
+# Política de migración para los tests de MigrateStorageClass con USB.
+#
+# Umbral bajo (500µs) porque el disco USB lento sí supera esa latencia de I/O,
+# mientras que el NVMe no. Destino: fast-nvme (StorageClass sobre el NVMe).
+# Se aplica a los pods víctima con app=victim, saturation-type=io.
 apiVersion: autoremediation.tfg.local/v1alpha1
 kind: IORemediationPolicy
 metadata:
-  name: e2e-io-migrate
+  name: e2e-migrate
   namespace: default
 spec:
   targetPodSelector:
@@ -14,7 +16,7 @@ spec:
   prometheusEndpoint: "http://localhost:9090"
   metricType: "IO"
   evaluationWindow: "30s"
-  latencyThreshold: "10ms"
+  latencyThreshold: "500us"
   action: "MigrateStorageClass"
   migrateStorageConfig:
     targetStorageClass: "fast-nvme"

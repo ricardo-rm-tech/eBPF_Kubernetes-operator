@@ -1,0 +1,131 @@
+No kind clusters found.
+Creating Kind cluster 'operator-test-e2e'...
+Creating cluster "operator-test-e2e" ...
+ • Ensuring node image (kindest/node:v1.34.0) 🖼  ...
+ ✓ Ensuring node image (kindest/node:v1.34.0) 🖼
+ • Preparing nodes 📦   ...
+ ✓ Preparing nodes 📦 
+ • Writing configuration 📜  ...
+ ✓ Writing configuration 📜
+ • Starting control-plane 🕹️  ...
+ ✓ Starting control-plane 🕹️
+ • Installing CNI 🔌  ...
+ ✓ Installing CNI 🔌
+ • Installing StorageClass 💾  ...
+ ✓ Installing StorageClass 💾
+Set kubectl context to "kind-operator-test-e2e"
+You can now use your cluster with:
+
+kubectl cluster-info --context kind-operator-test-e2e
+
+Not sure what to do next? 😅  Check out https://kind.sigs.k8s.io/docs/user/quick-start/
+"/home/richi/tfg/operator/bin/controller-gen" rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+"/home/richi/tfg/operator/bin/controller-gen" object:headerFile="hack/boilerplate.go.txt" paths="./..."
+go fmt ./...
+go vet ./...
+KIND=/home/richi/.local/bin/kind KIND_CLUSTER=operator-test-e2e go test -tags=e2e ./test/e2e/ -v -ginkgo.v
+=== RUN   TestE2E
+  Starting operator e2e test suite
+Running Suite: e2e suite - /home/richi/tfg/operator/test/e2e
+============================================================
+Random Seed: [1m1782328404[0m
+
+Will run [1m2[0m of [1m2[0m specs
+[38;5;243m------------------------------[0m
+[0m[1m[BeforeSuite] [0m
+[38;5;243m/home/richi/tfg/operator/test/e2e/e2e_suite_test.go:51[0m
+  [1mSTEP:[0m building the manager image [38;5;243m@ 06/24/26 21:13:24.002[0m
+  running: "make docker-build IMG=example.com/operator:v0.0.1"
+  [1mSTEP:[0m loading the manager image on Kind [38;5;243m@ 06/24/26 21:13:25.98[0m
+  running: "/home/richi/.local/bin/kind load docker-image example.com/operator:v0.0.1 --name operator-test-e2e"
+  [1mSTEP:[0m checking if CertManager is already installed [38;5;243m@ 06/24/26 21:13:29.137[0m
+  running: "kubectl get crds"
+  [1mSTEP:[0m installing CertManager [38;5;243m@ 06/24/26 21:13:29.215[0m
+  running: "kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.0/cert-manager.yaml"
+  running: "kubectl wait deployment.apps/cert-manager-webhook --for condition=Available --namespace cert-manager --timeout 5m"
+[38;5;10m[BeforeSuite] PASSED [42.633 seconds][0m
+[38;5;243m------------------------------[0m
+[0mManager [38;5;243mManager [0m[1mshould run successfully[0m
+[38;5;243m/home/richi/tfg/operator/test/e2e/e2e_test.go:144[0m
+  [1mSTEP:[0m creating manager namespace [38;5;243m@ 06/24/26 21:14:06.635[0m
+  running: "kubectl create ns operator-system"
+  [1mSTEP:[0m labeling the namespace to enforce the restricted security policy [38;5;243m@ 06/24/26 21:14:06.705[0m
+  running: "kubectl label --overwrite ns operator-system pod-security.kubernetes.io/enforce=restricted"
+  [1mSTEP:[0m installing CRDs [38;5;243m@ 06/24/26 21:14:06.78[0m
+  running: "make install"
+  [1mSTEP:[0m deploying the controller-manager [38;5;243m@ 06/24/26 21:14:07.792[0m
+  running: "make deploy IMG=example.com/operator:v0.0.1"
+  [1mSTEP:[0m validating that the controller-manager pod is running as expected [38;5;243m@ 06/24/26 21:14:09.26[0m
+  running: "kubectl get pods -l control-plane=controller-manager -o go-template={{ range .items }}{{ if not .metadata.deletionTimestamp }}{{ .metadata.name }}{{ \"\\n\" }}{{ end }}{{ end }} -n operator-system"
+  running: "kubectl get pods operator-controller-manager-65fdc46755-6t8wg -o jsonpath={.status.phase} -n operator-system"
+  running: "kubectl get pods -l control-plane=controller-manager -o go-template={{ range .items }}{{ if not .metadata.deletionTimestamp }}{{ .metadata.name }}{{ \"\\n\" }}{{ end }}{{ end }} -n operator-system"
+  running: "kubectl get pods operator-controller-manager-65fdc46755-6t8wg -o jsonpath={.status.phase} -n operator-system"
+  running: "kubectl get pods -l control-plane=controller-manager -o go-template={{ range .items }}{{ if not .metadata.deletionTimestamp }}{{ .metadata.name }}{{ \"\\n\" }}{{ end }}{{ end }} -n operator-system"
+  running: "kubectl get pods operator-controller-manager-65fdc46755-6t8wg -o jsonpath={.status.phase} -n operator-system"
+[38;5;10m• [5.095 seconds][0m
+[38;5;243m------------------------------[0m
+[0mManager [38;5;243mManager [0m[1mshould ensure the metrics endpoint is serving metrics[0m
+[38;5;243m/home/richi/tfg/operator/test/e2e/e2e_test.go:176[0m
+  [1mSTEP:[0m creating a ClusterRoleBinding for the service account to allow access to metrics [38;5;243m@ 06/24/26 21:14:11.731[0m
+  running: "kubectl create clusterrolebinding operator-metrics-binding --clusterrole=operator-metrics-reader --serviceaccount=operator-system:operator-controller-manager"
+  [1mSTEP:[0m validating that the metrics service is available [38;5;243m@ 06/24/26 21:14:11.806[0m
+  running: "kubectl get service operator-controller-manager-metrics-service -n operator-system"
+  [1mSTEP:[0m getting the service account token [38;5;243m@ 06/24/26 21:14:11.926[0m
+  [1mSTEP:[0m ensuring the controller pod is ready [38;5;243m@ 06/24/26 21:14:11.993[0m
+  running: "kubectl get pod operator-controller-manager-65fdc46755-6t8wg -n operator-system -o jsonpath={.status.conditions[?(@.type=='Ready')].status}"
+  running: "kubectl get pod operator-controller-manager-65fdc46755-6t8wg -n operator-system -o jsonpath={.status.conditions[?(@.type=='Ready')].status}"
+  running: "kubectl get pod operator-controller-manager-65fdc46755-6t8wg -n operator-system -o jsonpath={.status.conditions[?(@.type=='Ready')].status}"
+  running: "kubectl get pod operator-controller-manager-65fdc46755-6t8wg -n operator-system -o jsonpath={.status.conditions[?(@.type=='Ready')].status}"
+  running: "kubectl get pod operator-controller-manager-65fdc46755-6t8wg -n operator-system -o jsonpath={.status.conditions[?(@.type=='Ready')].status}"
+  running: "kubectl get pod operator-controller-manager-65fdc46755-6t8wg -n operator-system -o jsonpath={.status.conditions[?(@.type=='Ready')].status}"
+  running: "kubectl get pod operator-controller-manager-65fdc46755-6t8wg -n operator-system -o jsonpath={.status.conditions[?(@.type=='Ready')].status}"
+  running: "kubectl get pod operator-controller-manager-65fdc46755-6t8wg -n operator-system -o jsonpath={.status.conditions[?(@.type=='Ready')].status}"
+  running: "kubectl get pod operator-controller-manager-65fdc46755-6t8wg -n operator-system -o jsonpath={.status.conditions[?(@.type=='Ready')].status}"
+  running: "kubectl get pod operator-controller-manager-65fdc46755-6t8wg -n operator-system -o jsonpath={.status.conditions[?(@.type=='Ready')].status}"
+  [1mSTEP:[0m verifying that the controller manager is serving the metrics server [38;5;243m@ 06/24/26 21:14:21.732[0m
+  running: "kubectl logs operator-controller-manager-65fdc46755-6t8wg -n operator-system"
+  [1mSTEP:[0m creating the curl-metrics pod to access the metrics endpoint [38;5;243m@ 06/24/26 21:14:21.822[0m
+  running: "kubectl run curl-metrics --restart=Never --namespace operator-system --image=curlimages/curl:latest --overrides {\n\t\t\t\t\t\"spec\": {\n\t\t\t\t\t\t\"containers\": [{\n\t\t\t\t\t\t\t\"name\": \"curl\",\n\t\t\t\t\t\t\t\"image\": \"curlimages/curl:latest\",\n\t\t\t\t\t\t\t\"command\": [\"/bin/sh\", \"-c\"],\n\t\t\t\t\t\t\t\"args\": [\n\t\t\t\t\t\t\t\t\"for i in $(seq 1 30); do curl -v -k -H 'Authorization: Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6IjZ5R0lULVZ0MTBtZ2xuY050VjNLZXpmMTh1Y0pwbmNHNDlDbm9vY1JNRDAifQ.eyJhdWQiOlsiaHR0cHM6Ly9rdWJlcm5ldGVzLmRlZmF1bHQuc3ZjLmNsdXN0ZXIubG9jYWwiXSwiZXhwIjoxNzgyMzMyMDUxLCJpYXQiOjE3ODIzMjg0NTEsImlzcyI6Imh0dHBzOi8va3ViZXJuZXRlcy5kZWZhdWx0LnN2Yy5jbHVzdGVyLmxvY2FsIiwianRpIjoiNzE0NTE0NTgtYTc3YS00Njc2LWIxOGQtMTRkYjcwMTBkOGQ3Iiwia3ViZXJuZXRlcy5pbyI6eyJuYW1lc3BhY2UiOiJvcGVyYXRvci1zeXN0ZW0iLCJzZXJ2aWNlYWNjb3VudCI6eyJuYW1lIjoib3BlcmF0b3ItY29udHJvbGxlci1tYW5hZ2VyIiwidWlkIjoiZThmZDBhZGUtMmMzMi00OWNlLThjMTYtNmFjMzY1MDg3MzMxIn19LCJuYmYiOjE3ODIzMjg0NTEsInN1YiI6InN5c3RlbTpzZXJ2aWNlYWNjb3VudDpvcGVyYXRvci1zeXN0ZW06b3BlcmF0b3ItY29udHJvbGxlci1tYW5hZ2VyIn0.OTnhpliwVuX798LBdst5ewOvdF7ojPBZGJaM3jhjv-xPYwcvvHin-82691em5RkbJPzxHNtIr1cBVkEvbtrZFyFl3LBGvNFlk2ufmBr6Igwu1sz7Gu3P64A9IB9stYdUMaKMur18GFfNZfNo0fEyhA8a3uKWlTkrkEquNItJi8CkDZVLVKRI5Tx6hAC_I4ht9XckGSv3IvwLjkqB6sor-DuGP7ZpKUfKxbnflzK1qFPKT47YYFBTepx-Oxdf94P4S2-XXBkAeXMlWKJn44Or4bDpQur2gyjt3PpP-2X1pUF_uSNAE2R7fNWYFopmKoPr-czv9LgnLnCYjC0a95J2XQ' https://operator-controller-manager-metrics-service.operator-system.svc.cluster.local:8443/metrics && exit 0 || sleep 2; done; exit 1\"\n\t\t\t\t\t\t\t],\n\t\t\t\t\t\t\t\"securityContext\": {\n\t\t\t\t\t\t\t\t\"readOnlyRootFilesystem\": true,\n\t\t\t\t\t\t\t\t\"allowPrivilegeEscalation\": false,\n\t\t\t\t\t\t\t\t\"capabilities\": {\n\t\t\t\t\t\t\t\t\t\"drop\": [\"ALL\"]\n\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\t\"runAsNonRoot\": true,\n\t\t\t\t\t\t\t\t\"runAsUser\": 1000,\n\t\t\t\t\t\t\t\t\"seccompProfile\": {\n\t\t\t\t\t\t\t\t\t\"type\": \"RuntimeDefault\"\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t}],\n\t\t\t\t\t\t\"serviceAccountName\": \"operator-controller-manager\"\n\t\t\t\t\t}\n\t\t\t\t}"
+  [1mSTEP:[0m waiting for the curl-metrics pod to complete. [38;5;243m@ 06/24/26 21:14:21.898[0m
+  running: "kubectl get pods curl-metrics -o jsonpath={.status.phase} -n operator-system"
+  running: "kubectl get pods curl-metrics -o jsonpath={.status.phase} -n operator-system"
+  running: "kubectl get pods curl-metrics -o jsonpath={.status.phase} -n operator-system"
+  running: "kubectl get pods curl-metrics -o jsonpath={.status.phase} -n operator-system"
+  running: "kubectl get pods curl-metrics -o jsonpath={.status.phase} -n operator-system"
+  running: "kubectl get pods curl-metrics -o jsonpath={.status.phase} -n operator-system"
+  running: "kubectl get pods curl-metrics -o jsonpath={.status.phase} -n operator-system"
+  running: "kubectl get pods curl-metrics -o jsonpath={.status.phase} -n operator-system"
+  running: "kubectl get pods curl-metrics -o jsonpath={.status.phase} -n operator-system"
+  running: "kubectl get pods curl-metrics -o jsonpath={.status.phase} -n operator-system"
+  [1mSTEP:[0m getting the metrics by checking curl-metrics logs [38;5;243m@ 06/24/26 21:14:31.669[0m
+  [1mSTEP:[0m getting the curl-metrics logs [38;5;243m@ 06/24/26 21:14:31.669[0m
+  running: "kubectl logs curl-metrics -n operator-system"
+  [1mSTEP:[0m cleaning up the curl pod for metrics [38;5;243m@ 06/24/26 21:14:31.767[0m
+  running: "kubectl delete pod curl-metrics -n operator-system"
+  [1mSTEP:[0m undeploying the controller-manager [38;5;243m@ 06/24/26 21:14:31.856[0m
+  running: "make undeploy"
+  [1mSTEP:[0m uninstalling CRDs [38;5;243m@ 06/24/26 21:14:37.998[0m
+  running: "make uninstall"
+  [1mSTEP:[0m removing manager namespace [38;5;243m@ 06/24/26 21:14:38.985[0m
+  running: "kubectl delete ns operator-system"
+[38;5;10m• [27.325 seconds][0m
+[38;5;243m------------------------------[0m
+[0m[1m[AfterSuite] [0m
+[38;5;243m/home/richi/tfg/operator/test/e2e/e2e_suite_test.go:66[0m
+  [1mSTEP:[0m uninstalling CertManager [38;5;243m@ 06/24/26 21:14:39.056[0m
+  running: "kubectl delete -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.0/cert-manager.yaml"
+  running: "kubectl delete lease cert-manager-cainjector-leader-election -n kube-system --ignore-not-found --force --grace-period=0"
+  running: "kubectl delete lease cert-manager-controller -n kube-system --ignore-not-found --force --grace-period=0"
+[38;5;10m[AfterSuite] PASSED [13.339 seconds][0m
+[38;5;243m------------------------------[0m
+
+[38;5;10m[1mRan 2 of 2 Specs in 88.393 seconds[0m
+[38;5;10m[1mSUCCESS![0m -- [38;5;10m[1m2 Passed[0m | [38;5;9m[1m0 Failed[0m | [38;5;11m[1m0 Pending[0m | [38;5;14m[1m0 Skipped[0m
+--- PASS: TestE2E (88.39s)
+PASS
+ok  	github.com/richi/tfg/operator/test/e2e	88.402s
+make cleanup-test-e2e
+make[1]: se entra en el directorio '/home/richi/tfg/operator'
+Deleting cluster "operator-test-e2e" ...
+Deleted nodes: ["operator-test-e2e-control-plane"]
+make[1]: se sale del directorio '/home/richi/tfg/operator'

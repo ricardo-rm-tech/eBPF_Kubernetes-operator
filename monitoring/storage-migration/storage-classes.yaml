@@ -1,0 +1,25 @@
+# StorageClasses para el test de MigrateStorageClass.
+#
+# - fast-nvme  → usa el provisioner base (rancher.io/local-path), que aprovisiona
+#                en /opt/local-path-provisioner (disco NVMe rápido, en /).
+# - slow-usb   → usa un segundo provisioner (rancher.io/local-path-usb) que
+#                aprovisiona en /mnt/slow-usb (memoria USB externa, disco lento).
+#
+# Escenario: un pod arranca con PVC en slow-usb; al saturar I/O, el operador lo
+# migra creando un PVC nuevo en fast-nvme y repuntando el Deployment.
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-nvme
+provisioner: rancher.io/local-path
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: slow-usb
+provisioner: rancher.io/local-path-usb
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer

@@ -1,0 +1,62 @@
+=== RUN   TestClassifyCgroupPath
+--- PASS: TestClassifyCgroupPath (0.00s)
+=== RUN   TestParseKubePath_PodUID
+--- PASS: TestParseKubePath_PodUID (0.00s)
+=== RUN   TestParseKubePath_UnderscoredUID
+--- PASS: TestParseKubePath_UnderscoredUID (0.00s)
+=== RUN   TestParseKubePath_ContainerID
+--- PASS: TestParseKubePath_ContainerID (0.00s)
+=== RUN   TestParseKubePath_NonKube
+--- PASS: TestParseKubePath_NonKube (0.00s)
+=== RUN   TestParseKubePath_Empty
+--- PASS: TestParseKubePath_Empty (0.00s)
+=== RUN   TestCollectorHTTPEndpoint
+=== RUN   TestCollectorHTTPEndpoint/root_endpoint
+=== RUN   TestCollectorHTTPEndpoint/metrics_content_type
+=== RUN   TestCollectorHTTPEndpoint/metrics_contain_ebpf_counters
+=== RUN   TestCollectorHTTPEndpoint/metrics_contain_pod_uid_label
+=== RUN   TestCollectorHTTPEndpoint/metrics_values_correct
+=== RUN   TestCollectorHTTPEndpoint/metrics_prometheus_format
+--- PASS: TestCollectorHTTPEndpoint (0.01s)
+    --- PASS: TestCollectorHTTPEndpoint/root_endpoint (0.00s)
+    --- PASS: TestCollectorHTTPEndpoint/metrics_content_type (0.00s)
+    --- PASS: TestCollectorHTTPEndpoint/metrics_contain_ebpf_counters (0.00s)
+    --- PASS: TestCollectorHTTPEndpoint/metrics_contain_pod_uid_label (0.00s)
+    --- PASS: TestCollectorHTTPEndpoint/metrics_values_correct (0.00s)
+    --- PASS: TestCollectorHTTPEndpoint/metrics_prometheus_format (0.00s)
+=== RUN   TestCollectorMultiplePods
+--- PASS: TestCollectorMultiplePods (0.00s)
+=== RUN   TestEvaluatorValidation_EmptyEndpoint
+--- PASS: TestEvaluatorValidation_EmptyEndpoint (0.00s)
+=== RUN   TestEvaluatorValidation_InvalidWindow
+--- PASS: TestEvaluatorValidation_InvalidWindow (0.00s)
+=== RUN   TestEvaluatorValidation_ValidWindows
+--- PASS: TestEvaluatorValidation_ValidWindows (0.00s)
+=== RUN   TestEvaluatorValidation_InvalidThreshold
+--- PASS: TestEvaluatorValidation_InvalidThreshold (0.00s)
+=== RUN   TestEvaluatorValidation_ValidThresholds
+--- PASS: TestEvaluatorValidation_ValidThresholds (0.00s)
+=== RUN   TestPrometheusQueryFormat_IO
+--- PASS: TestPrometheusQueryFormat_IO (0.00s)
+=== RUN   TestPrometheusQueryFormat_CPU
+--- PASS: TestPrometheusQueryFormat_CPU (0.00s)
+=== RUN   TestPrometheusResponse_SaturatedPod
+--- PASS: TestPrometheusResponse_SaturatedPod (0.00s)
+=== RUN   TestPrometheusResponse_NoSaturation
+--- PASS: TestPrometheusResponse_NoSaturation (0.00s)
+=== RUN   TestDeltaFloat_Normal
+--- PASS: TestDeltaFloat_Normal (0.00s)
+=== RUN   TestDeltaFloat_NoChange
+--- PASS: TestDeltaFloat_NoChange (0.00s)
+=== RUN   TestDeltaFloat_CounterReset
+--- PASS: TestDeltaFloat_CounterReset (0.00s)
+=== RUN   TestPromCounterDeltaTracking
+--- PASS: TestPromCounterDeltaTracking (0.00s)
+=== RUN   TestPromAggregationByPodUID
+--- PASS: TestPromAggregationByPodUID (0.00s)
+=== RUN   TestPromSeriesCleanup
+--- PASS: TestPromSeriesCleanup (0.00s)
+=== RUN   TestMetricNames
+--- PASS: TestMetricNames (0.00s)
+PASS
+ok  	tfg/tests	0.017s
